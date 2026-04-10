@@ -231,7 +231,20 @@ class PagifySDK {
 
             // Create and configure iframe
             const iframe = this.createIframe(containerSelector);
-            iframe.srcdoc = iframeHTML;
+
+            // Use a static loader page as the iframe src so the iframe document
+            // gets its own CSP (set permissively in proxy.ts for that path only),
+            // rather than inheriting the parent page's strict CSP.
+            // The loader page receives the HTML content via postMessage once loaded.
+            iframe.src = '/pagify-loader.html';
+
+            // Once the loader page is ready, send it the HTML content to render.
+            iframe.addEventListener('load', () => {
+                iframe.contentWindow.postMessage({
+                    type: 'PAGIFY_RENDER',
+                    html: iframeHTML,
+                }, window.location.origin);
+            }, { once: true });
 
             // Insert iframe into specified container or body
             const container = this.getContainer(containerSelector);
@@ -400,6 +413,13 @@ class PagifySDK {
      */
     getPagedJSInitScript(instanceId, isViewOnlySkipMakingPDF) {
         return `
+            // Defer until <body> is parsed — required when called from a cached
+            // script's onload during document.write() (readyState is 'loading'
+            // and document.body is null at that point).
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initializePagination);
+                return;
+            }
             // Wait for fonts to load before starting pagination
             document.fonts.ready.then(async () => {
                 console.log("Fonts are ready");

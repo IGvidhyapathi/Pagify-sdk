@@ -1,6 +1,6 @@
 {
   "name": "@unimeta_care/pagify-sdk",
-  "version": "1.4.5",
+  "version": "1.4.9",
   "description": "Fork of @eka-care/pagify-sdk — standalone build with pagedjs and html2pdf.js inlined, zero CDN dependencies at runtime",
   "main": "dist/pagify.standalone.js",
   "module": "dist/pagify.standalone.js",
