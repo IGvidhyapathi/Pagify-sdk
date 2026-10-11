@@ -26,6 +26,17 @@ All credit for the core SDK design and implementation goes to the EKA Care team.
 npm install @unimeta_care/pagify-sdk
 ```
 
+## Upgrading from 1.x to 2.0
+
+2.0 makes the SDK work under `script-src 'self'`. It is a breaking change:
+
+1. **Host two new files.** Copy `dist/pagify-frame.html` and `dist/pagify-frame.js` into your public folder (see below). Without them, `onPdfError` reports that the frame did not respond.
+2. **Remove `/pagify-loader.html`** and any permissive CSP rule you added for it.
+3. **No scripts in content.** `<script>` tags and `on*=` attributes in `body_html`, `header_html`, `footer_html` and `head_html` no longer run.
+4. **The page must be served over http(s)** — `file://` pages get an error.
+
+Additive: `frameUrl` option, `onPdfReady(blobUrl, blob)` receives the Blob, and the blob URL now stays valid after the iframe is removed.
+
 ## Setup: host the frame files
 
 The SDK renders inside an iframe that loads two files from **your own origin**. Copy them from the package into your public/static folder (they must sit next to each other):
