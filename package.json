@@ -1,6 +1,6 @@
 {
   "name": "@unimeta_care/pagify-sdk",
-  "version": "1.4.9",
+  "version": "2.0.0",
   "description": "Fork of @eka-care/pagify-sdk — strict-CSP compatible (script-src 'self'): iframe code served from a same-origin bundle, zero CDN dependencies at runtime",
   "main": "dist/pagify.standalone.js",
   "module": "dist/pagify.standalone.js",
