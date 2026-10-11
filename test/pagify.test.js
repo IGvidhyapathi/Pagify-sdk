@@ -149,8 +149,18 @@ describe('Pagify SDK', () => {
 
     describe('strict CSP (script-src \'self\')', () => {
         const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+        const instances = [];
+
+        // Don't leave frame acknowledgement timers running between tests
+        afterEach(() => {
+            instances.splice(0).forEach((instance) => {
+                Object.values(instance.frameStorage).forEach((frame) => clearTimeout(frame.ackTimer));
+            });
+            jest.useRealTimers();
+        });
 
         const renderAndLoad = async (instance, options = {}) => {
+            instances.push(instance);
             await instance.render({ body_html: '<h1>Test</h1>', ...options });
             const iframe = document.querySelector('iframe[data-pagify-iframe="true"]');
             const postMessage = jest.spyOn(iframe.contentWindow, 'postMessage').mockImplementation();
@@ -232,8 +242,39 @@ describe('Pagify SDK', () => {
             expect(callback).not.toHaveBeenCalled();
         });
 
+        test('reports an error instead of hanging when the frame never answers', async () => {
+            jest.useFakeTimers();
+            const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+            const onPdfError = jest.fn();
+            const onPreviewReady = jest.fn();
+
+            await renderAndLoad(new PagifySDK(), { onPdfError });
+            await renderAndLoad(new PagifySDK(), { onPreviewReady, isViewOnlySkipMakingPDF: true });
+            jest.advanceTimersByTime(5000);
+
+            expect(onPdfError).toHaveBeenCalledWith(expect.stringContaining('Pagify frame did not respond'));
+            expect(onPreviewReady).toHaveBeenCalledWith({
+                success: false,
+                error: expect.stringContaining('/pagify-frame.html')
+            });
+            consoleSpy.mockRestore();
+        });
+
+        test('does not time out once the frame acknowledges', async () => {
+            jest.useFakeTimers();
+            const onPdfError = jest.fn();
+            const instance = new PagifySDK();
+            const { iframe, instanceId } = await renderAndLoad(instance, { onPdfError });
+
+            sendFromFrame(iframe.contentWindow, { type: 'PAGIFY_ACK', iter: instanceId });
+            jest.advanceTimersByTime(60000);
+
+            expect(onPdfError).not.toHaveBeenCalled();
+        });
+
         test('generatePDF resolves with the Blob without fetching a blob: URL', async () => {
             const instance = new PagifySDK();
+            instances.push(instance);
             const fetchSpy = jest.fn();
             global.fetch = fetchSpy;
             const blob = new Blob(['%PDF-'], { type: 'application/pdf' });

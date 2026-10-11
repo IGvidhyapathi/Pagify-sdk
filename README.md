@@ -37,6 +37,8 @@ cp node_modules/@unimeta_care/pagify-sdk/dist/pagify-frame.js   public/
 
 By default the SDK loads `/pagify-frame.html`. If you serve it elsewhere, pass `frameUrl` (it must be on the same origin as your app).
 
+If the frame page can't be reached (wrong `frameUrl`, 404, or a page opened from `file://`), `onPdfError` / `onPreviewReady({ success: false })` is called with an explanation instead of the render hanging.
+
 > Upgrading from the `/pagify-loader.html` setup: delete the loader page and its permissive CSP rule (e.g. in `proxy.ts`/middleware). `pagify-frame.html` works under the same strict CSP as the rest of your app.
 
 ### Content Security Policy

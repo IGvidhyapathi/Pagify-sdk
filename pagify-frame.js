@@ -7,7 +7,7 @@
  *
  * Protocol:
  *  parent -> frame: { type: 'PAGIFY_RENDER', instanceId, html, baseUrl, isViewOnlySkipMakingPDF, beautifyListItems, page_size }
- *  frame -> parent: { type: 'renderpdf' | 'PDF_READY' | 'PDF_ERROR' | 'PREVIEW_READY' | 'PREVIEW_ERROR', iter, ... }
+ *  frame -> parent: { type: 'PAGIFY_ACK' | 'renderpdf' | 'PDF_READY' | 'PDF_ERROR' | 'PREVIEW_READY' | 'PREVIEW_ERROR', iter, ... }
  *
  * The `html` field is data only (markup + styles). Any <script> in it is never
  * executed: it is parsed with DOMParser and the frame's CSP blocks inline scripts.
@@ -278,5 +278,6 @@ window.addEventListener('message', (event) => {
     }
     // One frame renders exactly one document.
     hasRendered = true;
+    notifyParent({ type: 'PAGIFY_ACK', iter: event.data.instanceId });
     render(event.data);
 });

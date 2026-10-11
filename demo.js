@@ -329,6 +329,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const initialized = initializePagifySDK();
         if (!initialized) {
             updateStatus('SDK initialization failed. Please check the console.', 'error');
+        } else if (window.location.protocol === 'file:') {
+            updateStatus('Open this demo through a local server, not as a file: run "npm run build" and "python3 -m http.server 8080", then open http://localhost:8080/', 'error');
         }
     }, 100);
     

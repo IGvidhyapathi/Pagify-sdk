@@ -21,6 +21,9 @@
 const pagifyIframeIdentifier = 'iframe[data-pagify-iframe="true"]';
 const defaultFrameUrl = '/pagify-frame.html';
 
+// How long the frame has to acknowledge PAGIFY_RENDER after it loads
+const frameAckTimeoutMs = 5000;
+
 class PagifySDK {
     constructor() {
         // Counter for unique iframe instances
@@ -49,82 +52,111 @@ class PagifySDK {
                 if (!frame || event.source !== frame.iframe.contentWindow || event.origin !== frame.origin) {
                     return;
                 }
-                if (["PDF_READY", "PDF_ERROR", "PREVIEW_READY", "PREVIEW_ERROR"].includes(event.data?.type)) {
-                    delete this.frameStorage[event.data?.iter];
-                }
-
-                if (event.data?.type === "renderpdf") {
-                    const callback = this.callbackStorage[event.data?.iter];
-                    if (callback) {
-                        callback();
-                    }
-                    // Clean up callback storage
-                    delete this.callbackStorage[event.data?.iter];
-                } else if (event.data?.type === "PDF_READY") {
-                    // Handle PDF blob ready event. The frame sends the Blob itself so the
-                    // URL belongs to this page and survives removal of the iframe.
-                    const blobUrl = URL.createObjectURL(event.data.blob);
-                    console.log('PDF blob ready:', blobUrl);
-                    
-                    // Check if there's a specific callback for this instance
-                    const instanceId = event.data?.iter;
-                    if (instanceId && this.pdfCallbackStorage[instanceId]?.onPdfReady) {
-                        this.pdfCallbackStorage[instanceId].onPdfReady(blobUrl, event.data.blob);
-                        delete this.pdfCallbackStorage[instanceId];
-                    }
-                    
-                    // Also trigger global PDF ready event for backward compatibility
-                    window.dispatchEvent(new CustomEvent('pdfReady', { 
-                        detail: { blobUrl: blobUrl } 
-                    }));
-                    
-                } else if (event.data?.type === "PDF_ERROR") {
-                    // Handle PDF generation error
-                    console.error('PDF generation error:', event.data.error);
-                    
-                    // Check if there's a specific callback for this instance
-                    const instanceId = event.data?.iter;
-                    if (instanceId && this.pdfCallbackStorage[instanceId]?.onPdfError) {
-                        this.pdfCallbackStorage[instanceId].onPdfError(event.data.error);
-                        delete this.pdfCallbackStorage[instanceId];
-                    }
-                    
-                    // Also trigger global PDF error event for backward compatibility
-                    window.dispatchEvent(new CustomEvent('pdfError', { 
-                        detail: { error: event.data.error } 
-                    }));
-                }
-                else if (event.data?.type === "PREVIEW_READY") {
-                    const instanceId = event.data?.iter;
-                    if (instanceId && this.pdfCallbackStorage[instanceId]?.onPreviewReady) {
-                        this.pdfCallbackStorage[instanceId].onPreviewReady({
-                            success: true
-                        });
-                        delete this.pdfCallbackStorage[instanceId];
-                    }
-                    
-                    // Also trigger global preview ready event for backward compatibility
-                    window.dispatchEvent(new CustomEvent('previewReady', { 
-                        detail: { success: true } 
-                    }));
-                } else if (event.data?.type === "PREVIEW_ERROR") {
-                    console.error('Preview error:', event.data.error);
-                    
-                    const instanceId = event.data?.iter;
-                    if (instanceId && this.pdfCallbackStorage[instanceId]?.onPreviewReady) {
-                        this.pdfCallbackStorage[instanceId].onPreviewReady({
-                            success: false,
-                            error: event.data.error
-                        });
-                        delete this.pdfCallbackStorage[instanceId];
-                    }
-                    
-                    window.dispatchEvent(new CustomEvent('previewError', { 
-                        detail: { success: false, error: event?.data?.error } 
-                    }));
-                }
+                this.handleFrameMessage(event);
             }, false);
         }
+    }
+
+    /**
+     * Handle a verified message from a Pagify frame
+     */
+    handleFrameMessage(event) {
+        const frame = this.frameStorage[event.data?.iter];
+        if (event.data?.type === "PAGIFY_ACK") {
+            // The frame received the content; it is rendering now
+            clearTimeout(frame?.ackTimer);
+            return;
+        }
+        if (["PDF_READY", "PDF_ERROR", "PREVIEW_READY", "PREVIEW_ERROR"].includes(event.data?.type)) {
+            clearTimeout(frame?.ackTimer);
+            delete this.frameStorage[event.data?.iter];
+        }
+
+        if (event.data?.type === "renderpdf") {
+            const callback = this.callbackStorage[event.data?.iter];
+            if (callback) {
+                callback();
+            }
+            // Clean up callback storage
+            delete this.callbackStorage[event.data?.iter];
+        } else if (event.data?.type === "PDF_READY") {
+            // Handle PDF blob ready event. The frame sends the Blob itself so the
+            // URL belongs to this page and survives removal of the iframe.
+            const blobUrl = URL.createObjectURL(event.data.blob);
+            console.log('PDF blob ready:', blobUrl);
+                    
+            // Check if there's a specific callback for this instance
+            const instanceId = event.data?.iter;
+            if (instanceId && this.pdfCallbackStorage[instanceId]?.onPdfReady) {
+                this.pdfCallbackStorage[instanceId].onPdfReady(blobUrl, event.data.blob);
+                delete this.pdfCallbackStorage[instanceId];
+            }
+                    
+            // Also trigger global PDF ready event for backward compatibility
+            window.dispatchEvent(new CustomEvent('pdfReady', { 
+                detail: { blobUrl: blobUrl } 
+            }));
+                    
+        } else if (event.data?.type === "PDF_ERROR") {
+            // Handle PDF generation error
+            console.error('PDF generation error:', event.data.error);
+                    
+            // Check if there's a specific callback for this instance
+            const instanceId = event.data?.iter;
+            if (instanceId && this.pdfCallbackStorage[instanceId]?.onPdfError) {
+                this.pdfCallbackStorage[instanceId].onPdfError(event.data.error);
+                delete this.pdfCallbackStorage[instanceId];
+            }
+                    
+            // Also trigger global PDF error event for backward compatibility
+            window.dispatchEvent(new CustomEvent('pdfError', { 
+                detail: { error: event.data.error } 
+            }));
+        }
+        else if (event.data?.type === "PREVIEW_READY") {
+            const instanceId = event.data?.iter;
+            if (instanceId && this.pdfCallbackStorage[instanceId]?.onPreviewReady) {
+                this.pdfCallbackStorage[instanceId].onPreviewReady({
+                    success: true
+                });
+                delete this.pdfCallbackStorage[instanceId];
+            }
+                    
+            // Also trigger global preview ready event for backward compatibility
+            window.dispatchEvent(new CustomEvent('previewReady', { 
+                detail: { success: true } 
+            }));
+        } else if (event.data?.type === "PREVIEW_ERROR") {
+            console.error('Preview error:', event.data.error);
+                    
+            const instanceId = event.data?.iter;
+            if (instanceId && this.pdfCallbackStorage[instanceId]?.onPreviewReady) {
+                this.pdfCallbackStorage[instanceId].onPreviewReady({
+                    success: false,
+                    error: event.data.error
+                });
+                delete this.pdfCallbackStorage[instanceId];
+            }
+                    
+            window.dispatchEvent(new CustomEvent('previewError', { 
+                detail: { success: false, error: event?.data?.error } 
+            }));
+        }
+    }
+
+    /**
+     * Report a failure for an instance whose frame never answered,
+     * through the same callbacks and events as a frame-reported error
+     */
+    failInstance(instanceId, isViewOnlySkipMakingPDF, error) {
+        console.error('Pagify:', error);
+        this.handleFrameMessage({
+            data: {
+                type: isViewOnlySkipMakingPDF ? "PREVIEW_ERROR" : "PDF_ERROR",
+                error: error,
+                iter: instanceId
+            }
+        });
     }
 
     /**
@@ -218,6 +250,13 @@ class PagifySDK {
                 pageNumberCSS,
             });
 
+            // The frame is matched by origin, which file:// pages do not have
+            if (window.location.protocol === 'file:') {
+                this.failInstance(instanceId, isViewOnlySkipMakingPDF,
+                    'Pagify must be served over http(s); pages opened from file:// cannot talk to the Pagify frame.');
+                return;
+            }
+
             // Create and configure iframe
             const iframe = this.createIframe(containerSelector);
 
@@ -230,6 +269,14 @@ class PagifySDK {
 
             // Once the frame page is ready, send it the content to render.
             iframe.addEventListener('load', () => {
+                // If frameUrl is wrong (e.g. 404) nothing answers: report it instead of hanging
+                this.frameStorage[instanceId].ackTimer = setTimeout(() => {
+                    if (!this.frameStorage[instanceId]) return;
+                    delete this.frameStorage[instanceId];
+                    this.failInstance(instanceId, isViewOnlySkipMakingPDF,
+                        `Pagify frame did not respond. Check that ${frameSrc.href} serves pagify-frame.html (with pagify-frame.js next to it) from the same origin as this page.`);
+                }, frameAckTimeoutMs);
+
                 iframe.contentWindow.postMessage({
                     type: 'PAGIFY_RENDER',
                     instanceId,
