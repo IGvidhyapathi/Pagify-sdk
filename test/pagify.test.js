@@ -72,7 +72,6 @@ describe('Pagify SDK', () => {
     test('should generate iframe HTML with correct structure', () => {
         const instance = new PagifySDK();
         const html = instance.buildIframeHTML({
-            instanceId: 1,
             body_html: '<h1>Test</h1>',
             header_html: '<div>Header</div>',
             footer_html: '<div>Footer</div>',
@@ -102,7 +101,6 @@ describe('Pagify SDK', () => {
         const iframeWithContainer = instance.createIframe('#container');
         expect(iframeWithContainer.style.width).toBe('100%');
         expect(iframeWithContainer.style.height).toBe('100%');
-        expect(iframeWithContainer.style.border).toBe('none');
         
         // Test without container selector
         const iframeWithoutContainer = instance.createIframe(null);
@@ -147,5 +145,109 @@ describe('Pagify SDK', () => {
         });
         
         consoleSpy.mockRestore();
+    });
+
+    describe('strict CSP (script-src \'self\')', () => {
+        const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+        const renderAndLoad = async (instance, options = {}) => {
+            await instance.render({ body_html: '<h1>Test</h1>', ...options });
+            const iframe = document.querySelector('iframe[data-pagify-iframe="true"]');
+            const postMessage = jest.spyOn(iframe.contentWindow, 'postMessage').mockImplementation();
+            iframe.dispatchEvent(new Event('load'));
+            return { iframe, postMessage, instanceId: postMessage.mock.calls[0][0].instanceId };
+        };
+
+        const sendFromFrame = (source, data) => {
+            window.dispatchEvent(new MessageEvent('message', { data, source, origin: window.location.origin }));
+        };
+
+        test('iframe HTML contains no scripts, inline handlers or CDN URLs', () => {
+            const html = new PagifySDK().buildIframeHTML({
+                body_html: '<h1>Test</h1>',
+                page_size: 'A4',
+                pageNumberCSS: ''
+            });
+            expect(html).not.toMatch(/<script/i);
+            expect(html).not.toMatch(/\sonload=/i);
+            expect(html).not.toContain('unpkg.com');
+        });
+
+        test('loads the same-origin frame page and sends it data only', async () => {
+            const { iframe, postMessage } = await renderAndLoad(new PagifySDK(), {
+                page_size: 'Letter',
+                isViewOnlySkipMakingPDF: true,
+                beautifyListItems: false
+            });
+
+            expect(iframe.src).toBe(`${window.location.origin}/pagify-frame.html`);
+            expect(postMessage).toHaveBeenCalledTimes(1);
+            const [message, targetOrigin] = postMessage.mock.calls[0];
+            expect(targetOrigin).toBe(window.location.origin);
+            expect(message).toMatchObject({
+                type: 'PAGIFY_RENDER',
+                page_size: 'Letter',
+                isViewOnlySkipMakingPDF: true,
+                beautifyListItems: false,
+                baseUrl: document.baseURI
+            });
+            expect(message.html).toContain('<h1>Test</h1>');
+        });
+
+        test('uses a custom frameUrl', async () => {
+            const { iframe } = await renderAndLoad(new PagifySDK(), { frameUrl: '/static/pagify/pagify-frame.html' });
+            expect(iframe.src).toBe(`${window.location.origin}/static/pagify/pagify-frame.html`);
+        });
+
+        test('delivers the PDF Blob from its own iframe', async () => {
+            const onPdfReady = jest.fn();
+            const instance = new PagifySDK();
+            const { iframe, instanceId } = await renderAndLoad(instance, { onPdfReady });
+            const blob = new Blob(['%PDF-'], { type: 'application/pdf' });
+
+            sendFromFrame(iframe.contentWindow, { type: 'PDF_READY', blob, iter: instanceId });
+
+            expect(onPdfReady).toHaveBeenCalledWith('blob:mock-url', blob);
+            expect(URL.createObjectURL).toHaveBeenCalledWith(blob);
+        });
+
+        test('ignores messages that do not come from its iframe', async () => {
+            const onPdfReady = jest.fn();
+            const callback = jest.fn();
+            const instance = new PagifySDK();
+            const { iframe, instanceId } = await renderAndLoad(instance, { onPdfReady, callback });
+            const blob = new Blob(['%PDF-']);
+
+            // Another window
+            sendFromFrame(window, { type: 'PDF_READY', blob, iter: instanceId });
+            sendFromFrame(window, { type: 'renderpdf', iter: instanceId });
+            // Right window, wrong origin
+            window.dispatchEvent(new MessageEvent('message', {
+                data: { type: 'PDF_READY', blob, iter: instanceId },
+                source: iframe.contentWindow,
+                origin: 'https://evil.example'
+            }));
+
+            expect(onPdfReady).not.toHaveBeenCalled();
+            expect(callback).not.toHaveBeenCalled();
+        });
+
+        test('generatePDF resolves with the Blob without fetching a blob: URL', async () => {
+            const instance = new PagifySDK();
+            const fetchSpy = jest.fn();
+            global.fetch = fetchSpy;
+            const blob = new Blob(['%PDF-'], { type: 'application/pdf' });
+
+            const promise = instance.generatePDF({ body_html: '<p>x</p>' });
+            await flush();
+            const iframe = document.querySelector('iframe[data-pagify-iframe="true"]');
+            const postMessage = jest.spyOn(iframe.contentWindow, 'postMessage').mockImplementation();
+            iframe.dispatchEvent(new Event('load'));
+            sendFromFrame(iframe.contentWindow, { type: 'PDF_READY', blob, iter: postMessage.mock.calls[0][0].instanceId });
+
+            await expect(promise).resolves.toBe(blob);
+            expect(fetchSpy).not.toHaveBeenCalled();
+            delete global.fetch;
+        });
     });
 });

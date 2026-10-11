@@ -1,7 +1,7 @@
 {
   "name": "@unimeta_care/pagify-sdk",
   "version": "1.4.9",
-  "description": "Fork of @eka-care/pagify-sdk — standalone build with pagedjs and html2pdf.js inlined, zero CDN dependencies at runtime",
+  "description": "Fork of @eka-care/pagify-sdk — strict-CSP compatible (script-src 'self'): iframe code served from a same-origin bundle, zero CDN dependencies at runtime",
   "main": "dist/pagify.standalone.js",
   "module": "dist/pagify.standalone.js",
   "types": "dist/pagify.d.ts",
@@ -69,6 +69,7 @@
     "@rollup/plugin-terser": "^0.4.4",
     "eslint": "^8.42.0",
     "jest": "^29.5.0",
+    "jest-environment-jsdom": "^29.7.0",
     "rollup": "^3.25.0",
     "typescript": "^5.1.0"
   },

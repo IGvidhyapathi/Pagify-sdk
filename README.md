@@ -2,7 +2,9 @@
 
 A JavaScript SDK for rendering HTML content as paginated PDFs using Paged.js and html2pdf.js.
 
-This is a **standalone fork** of [@eka-care/pagify-sdk](https://github.com/eka-care/Pagify-sdk) by [EKA Care](https://eka.care). The original library fetches `pagedjs` and `html2pdf.js` from unpkg.com at runtime inside iframe srcdoc contexts. This fork inlines both dependencies at build time, eliminating all CDN fetches — required for environments with a strict Content Security Policy (e.g. `script-src 'self'` without unpkg.com).
+This is a fork of [@eka-care/pagify-sdk](https://github.com/eka-care/Pagify-sdk) by [EKA Care](https://eka.care). The original library builds an iframe `srcdoc` full of inline `<script>` blocks, an inline `onload=` handler, and fetches `pagedjs` and `html2pdf.js` from unpkg.com at runtime. A strict Content Security Policy blocks all of that.
+
+This fork moves every line of iframe code into a same-origin file (`pagify-frame.js`, with Paged.js and html2pdf.js bundled in) loaded by a static page (`pagify-frame.html`). The iframe receives only data — never code — so the SDK works with `script-src 'self'`: no `'unsafe-inline'`, no `'unsafe-eval'`, no CDN.
 
 All credit for the core SDK design and implementation goes to the EKA Care team.
 
@@ -10,17 +12,47 @@ All credit for the core SDK design and implementation goes to the EKA Care team.
 
 | | `@eka-care/pagify-sdk` | `@unimeta_care/pagify-sdk` |
 |---|---|---|
-| `pagedjs` loading | Fetched from `unpkg.com` at runtime | Inlined at build time |
-| `html2pdf.js` loading | Fetched from `unpkg.com` at runtime | Inlined at build time |
+| `pagedjs` loading | Fetched from `unpkg.com` at runtime | Bundled in `pagify-frame.js` (same origin) |
+| `html2pdf.js` loading | Fetched from `unpkg.com` at runtime | Bundled in `pagify-frame.js` (same origin) |
+| Iframe code | Inline `<script>` + `onload=` in `srcdoc` | External `pagify-frame.js` |
 | CDN dependency | Yes | None |
-| CSP compatibility | Requires `unpkg.com` in `script-src` + `connect-src` | Works with `script-src 'self'` |
-| Bundle size | ~25KB | ~3.3MB (dependencies included) |
+| CSP compatibility | Requires `'unsafe-inline'` and `unpkg.com` in `script-src` | Works with `script-src 'self'` |
+| `<script>` / `on*=` in your HTML content | Executed | Never executed |
+| SDK size | ~25KB | ~10KB (+ ~1.3MB `pagify-frame.js`, loaded only by the iframe) |
 
 ## Installation
 
 ```bash
 npm install @unimeta_care/pagify-sdk
 ```
+
+## Setup: host the frame files
+
+The SDK renders inside an iframe that loads two files from **your own origin**. Copy them from the package into your public/static folder (they must sit next to each other):
+
+```bash
+cp node_modules/@unimeta_care/pagify-sdk/dist/pagify-frame.html public/
+cp node_modules/@unimeta_care/pagify-sdk/dist/pagify-frame.js   public/
+```
+
+By default the SDK loads `/pagify-frame.html`. If you serve it elsewhere, pass `frameUrl` (it must be on the same origin as your app).
+
+> Upgrading from the `/pagify-loader.html` setup: delete the loader page and its permissive CSP rule (e.g. in `proxy.ts`/middleware). `pagify-frame.html` works under the same strict CSP as the rest of your app.
+
+### Content Security Policy
+
+Paged.js writes `<style>` elements at runtime, so the iframe needs inline styles. Scripts need nothing special:
+
+```
+script-src 'self';
+style-src 'self' 'unsafe-inline';
+frame-src 'self';
+img-src 'self' data: blob:;
+```
+
+`unpkg.com`, `'unsafe-inline'` and `'unsafe-eval'` are **not** needed in `script-src`.
+
+Because the iframe enforces `script-src 'self'`, any `<script>` tag or `on*=` attribute inside `body_html`, `header_html`, `footer_html` or `head_html` is ignored. Use `head_html` for styles and fonts only.
 
 ## Usage
 
@@ -117,7 +149,8 @@ window.open(url, '_blank');
 | `footer_height` | `string` | `"0mm"` | Footer height |
 | `containerSelector` | `string` | `null` | CSS selector for preview container |
 | `isViewOnlySkipMakingPDF` | `boolean` | `false` | Preview only, skip PDF generation |
-| `onPdfReady` | `function` | `null` | Called with blob URL when PDF is ready |
+| `frameUrl` | `string` | `"/pagify-frame.html"` | Same-origin URL of `pagify-frame.html` |
+| `onPdfReady` | `function` | `null` | Called with `(blobUrl, blob)` when PDF is ready |
 | `onPdfError` | `function` | `null` | Called with error if PDF generation fails |
 | `onPreviewReady` | `function` | `null` | Called with `{ success, error? }` when preview is ready |
 
@@ -154,16 +187,17 @@ npm run build     # production build (all three targets)
 npm run dev       # watch mode
 ```
 
-Three build outputs:
-- `dist/pagify.esm.js` — ES module (external pagedjs/html2pdf peers)
-- `dist/pagify.js` — UMD (external pagedjs/html2pdf peers)
-- `dist/pagify.standalone.js` — UMD with pagedjs and html2pdf inlined (**this is the published main**)
+Build outputs:
+- `dist/pagify.esm.js` — ES module
+- `dist/pagify.js` — UMD
+- `dist/pagify.standalone.js` — UMD (**this is the published main**)
+- `dist/pagify-frame.html` + `dist/pagify-frame.js` — iframe page and its runtime (Paged.js + html2pdf.js bundled); host these on your origin
 
 ## Credits
 
 This package is a fork of [@eka-care/pagify-sdk](https://github.com/eka-care/Pagify-sdk), originally created and maintained by [EKA Care](https://eka.care) (`dev@eka.care`). Licensed under MIT.
 
-The standalone inlining approach was added by Unimeta Care to support strict CSP environments. The upstream PR is tracked at [IGvidhyapathi/Pagify-sdk](https://github.com/IGvidhyapathi/Pagify-sdk).
+The same-origin frame approach was added by Unimeta Care to support strict CSP environments. The upstream PR is tracked at [IGvidhyapathi/Pagify-sdk](https://github.com/IGvidhyapathi/Pagify-sdk).
 
 ## License
 

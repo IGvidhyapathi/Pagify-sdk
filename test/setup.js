@@ -1,5 +1,4 @@
 // Test setup file
-import 'jest-environment-jsdom';
 
 // Mock the dynamic imports
 global.mockPagedJS = {
@@ -40,8 +39,9 @@ global.mockHtml2pdf = {
     })
 };
 
-// Mock URL.createObjectURL
+// Mock URL.createObjectURL / revokeObjectURL
 global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
+global.URL.revokeObjectURL = jest.fn();
 
 // Mock dynamic imports
 jest.mock('pagedjs', () => global.mockPagedJS);

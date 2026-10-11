@@ -42,14 +42,26 @@ export interface PagifyOptions {
   /** Function called when rendering completes */
   callback?: () => void;
   
-  /** Callback when PDF blob is ready (receives blobUrl) */
-  onPdfReady?: (blobUrl: string) => void;
+  /** Callback when PDF blob is ready (receives blobUrl and the Blob) */
+  onPdfReady?: (blobUrl: string, blob: Blob) => void;
   
   /** Callback when PDF generation fails (receives error) */
   onPdfError?: (error: string) => void;
   
   /** CSS selector for container element (optional) */
   containerSelector?: string;
+
+  /** If true, only render the preview without generating a PDF */
+  isViewOnlySkipMakingPDF?: boolean;
+
+  /** Callback when the preview is ready (preview-only mode) */
+  onPreviewReady?: (result: { success: boolean; error?: string }) => void;
+
+  /** If true, apply bullet point fixes to list items (default: true) */
+  beautifyListItems?: boolean;
+
+  /** Same-origin URL of pagify-frame.html (default: '/pagify-frame.html') */
+  frameUrl?: string;
 }
 
 export interface PagificationResult {

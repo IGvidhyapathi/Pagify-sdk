@@ -10,14 +10,16 @@
  * @license MIT
  */
 
-import { Previewer } from 'pagedjs';
-import html2pdf from 'html2pdf.js';
-
 /**
  * Pagify SDK Class
  * Handles PDF rendering with pagination using Paged.js and html2pdf.js
+ *
+ * Paged.js and html2pdf.js run inside an iframe that loads pagify-frame.html /
+ * pagify-frame.js from the host app's own origin, so the SDK works under a
+ * Content Security Policy of `script-src 'self'` (no inline scripts, no CDN).
  */
 const pagifyIframeIdentifier = 'iframe[data-pagify-iframe="true"]';
+const defaultFrameUrl = '/pagify-frame.html';
 
 class PagifySDK {
     constructor() {
@@ -27,6 +29,9 @@ class PagifySDK {
         // Storage for callback functions indexed by instance ID
         this.callbackStorage = {};
         this.pdfCallbackStorage = {};
+
+        // Iframe and origin per instance ID, used to verify who sent a message
+        this.frameStorage = {};
 
         // Initialize message listener
         this.initMessageListener();
@@ -39,6 +44,15 @@ class PagifySDK {
     initMessageListener() {
         if (typeof window !== 'undefined') {
             window.addEventListener("message", (event) => {
+                // Only accept messages from the iframe this SDK created for that instance
+                const frame = this.frameStorage[event.data?.iter];
+                if (!frame || event.source !== frame.iframe.contentWindow || event.origin !== frame.origin) {
+                    return;
+                }
+                if (["PDF_READY", "PDF_ERROR", "PREVIEW_READY", "PREVIEW_ERROR"].includes(event.data?.type)) {
+                    delete this.frameStorage[event.data?.iter];
+                }
+
                 if (event.data?.type === "renderpdf") {
                     const callback = this.callbackStorage[event.data?.iter];
                     if (callback) {
@@ -47,19 +61,21 @@ class PagifySDK {
                     // Clean up callback storage
                     delete this.callbackStorage[event.data?.iter];
                 } else if (event.data?.type === "PDF_READY") {
-                    // Handle PDF blob ready event
-                    console.log('PDF blob ready:', event.data.blobUrl);
+                    // Handle PDF blob ready event. The frame sends the Blob itself so the
+                    // URL belongs to this page and survives removal of the iframe.
+                    const blobUrl = URL.createObjectURL(event.data.blob);
+                    console.log('PDF blob ready:', blobUrl);
                     
                     // Check if there's a specific callback for this instance
                     const instanceId = event.data?.iter;
                     if (instanceId && this.pdfCallbackStorage[instanceId]?.onPdfReady) {
-                        this.pdfCallbackStorage[instanceId].onPdfReady(event.data.blobUrl);
+                        this.pdfCallbackStorage[instanceId].onPdfReady(blobUrl, event.data.blob);
                         delete this.pdfCallbackStorage[instanceId];
                     }
                     
                     // Also trigger global PDF ready event for backward compatibility
                     window.dispatchEvent(new CustomEvent('pdfReady', { 
-                        detail: { blobUrl: event.data.blobUrl } 
+                        detail: { blobUrl: blobUrl } 
                     }));
                     
                 } else if (event.data?.type === "PDF_ERROR") {
@@ -112,32 +128,6 @@ class PagifySDK {
     }
 
     /**
-     * Load html2pdf library via script tag as fallback
-     */
-    loadHtml2PdfLibrary() {
-        return new Promise((resolve, reject) => {
-            // Check if html2pdf is already available
-            if (typeof window.html2pdf === 'function') {
-                resolve(window.html2pdf);
-                return;
-            }
-            
-            // Create script tag to load html2pdf
-            const script = document.createElement('script');
-            script.src = 'https://unpkg.com/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js';
-            script.onload = () => {
-                if (typeof window.html2pdf === 'function') {
-                    resolve(window.html2pdf);
-                } else {
-                    reject(new Error('html2pdf not available after loading script'));
-                }
-            };
-            script.onerror = () => reject(new Error('Failed to load html2pdf script'));
-            document.head.appendChild(script);
-        });
-    }
-
-    /**
      * Render HTML content as a paginated PDF
      * @param {Object} options - Configuration options for PDF rendering
      * @param {string} options.body_html - Main HTML content for the PDF body
@@ -153,12 +143,13 @@ class PagifySDK {
      * @param {boolean} options.footer_only_on_last_page - Show footer only on last page
      * @param {string} options.page_padding_top - Top padding for page content
      * @param {function} options.callback - Function called when rendering completes
-     * @param {function} options.onPdfReady - Callback when PDF blob is ready (receives blobUrl)
+     * @param {function} options.onPdfReady - Callback when PDF blob is ready (receives blobUrl, blob)
      * @param {function} options.onPdfError - Callback when PDF generation fails (receives error)
      * @param {string} options.containerSelector - CSS selector for container element
      * @param {boolean} options.isViewOnlySkipMakingPDF - If true, only render preview without generating PDF
      * @param {function} options.onPreviewReady - Callback when in preview only mode, fired on iframe ready in DOM (receives {success: boolean, error?: string})
      * @param {boolean} options.beautifyListItems - If true, apply bullet point fixes to list items (default: true)
+     * @param {string} options.frameUrl - Same-origin URL of pagify-frame.html (default: '/pagify-frame.html')
      * @returns {Promise<void>}
      */
     async render({
@@ -181,6 +172,7 @@ class PagifySDK {
         isViewOnlySkipMakingPDF = false,
         onPreviewReady = null,
         beautifyListItems = true,
+        frameUrl = defaultFrameUrl,
     }) {
         try {
             // Generate unique instance ID
@@ -210,9 +202,8 @@ class PagifySDK {
                 }`
                 : "";
 
-            // Build complete HTML document for the iframe
+            // Build the HTML document (markup and styles only) for the iframe
             const iframeHTML = this.buildIframeHTML({
-                instanceId,
                 body_html,
                 header_html,
                 footer_html,
@@ -225,25 +216,29 @@ class PagifySDK {
                 footer_only_on_last_page,
                 page_padding_top,
                 pageNumberCSS,
-                isViewOnlySkipMakingPDF,
-                beautifyListItems,
             });
 
             // Create and configure iframe
             const iframe = this.createIframe(containerSelector);
 
-            // Use a static loader page as the iframe src so the iframe document
-            // gets its own CSP (set permissively in proxy.ts for that path only),
-            // rather than inheriting the parent page's strict CSP.
-            // The loader page receives the HTML content via postMessage once loaded.
-            iframe.src = '/pagify-loader.html';
+            // The frame page loads its code from pagify-frame.js on this origin.
+            // It receives only data (HTML + options), never code, so its CSP can be
+            // `script-src 'self'` like the rest of the app.
+            const frameSrc = new URL(frameUrl, window.location.href);
+            iframe.src = frameSrc.href;
+            this.frameStorage[instanceId] = { iframe, origin: frameSrc.origin };
 
-            // Once the loader page is ready, send it the HTML content to render.
+            // Once the frame page is ready, send it the content to render.
             iframe.addEventListener('load', () => {
                 iframe.contentWindow.postMessage({
                     type: 'PAGIFY_RENDER',
+                    instanceId,
                     html: iframeHTML,
-                }, window.location.origin);
+                    baseUrl: document.baseURI,
+                    isViewOnlySkipMakingPDF,
+                    beautifyListItems,
+                    page_size,
+                }, frameSrc.origin);
             }, { once: true });
 
             // Insert iframe into specified container or body
@@ -259,10 +254,10 @@ class PagifySDK {
     }
 
     /**
-     * Build HTML content for the iframe
+     * Build HTML content for the iframe.
+     * Contains markup and styles only; pagify-frame.js supplies all behaviour.
      */
     buildIframeHTML({
-        instanceId,
         body_html,
         header_html,
         footer_html,
@@ -275,30 +270,12 @@ class PagifySDK {
         footer_only_on_last_page,
         page_padding_top,
         pageNumberCSS,
-        isViewOnlySkipMakingPDF,
-        beautifyListItems,
     }) {
         return `
             <html>
                 <head>
                     <meta charset="UTF-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <script>
-                        // Configure Paged.js
-                        window.PagedConfig = {
-                            auto: false,
-                        }
-                    <\/script>
-                    <script>
-                        let totalPages;
-                        let isViewOnly = ${isViewOnlySkipMakingPDF};
-                        
-                        ${!isViewOnlySkipMakingPDF ? `${this.getPdfGenerationScript(instanceId, beautifyListItems, page_size)}` : ''}
-                        function initializePagination() {
-                            ${this.getPagedJSInitScript(instanceId, isViewOnlySkipMakingPDF)}
-                        }
-                    <\/script>
-                    <script src="https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.js" onload="initializePagination()"><\/script>
                     <style>
                         /* Ensure print colors are preserved */
                         body {
@@ -409,326 +386,6 @@ class PagifySDK {
     }
 
     /**
-     * Get Paged.js initialization script
-     */
-    getPagedJSInitScript(instanceId, isViewOnlySkipMakingPDF) {
-        return `
-            // Defer until <body> is parsed — required when called from a cached
-            // script's onload during document.write() (readyState is 'loading'
-            // and document.body is null at that point).
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', initializePagination);
-                return;
-            }
-            // Wait for fonts to load before starting pagination
-            document.fonts.ready.then(async () => {
-                console.log("Fonts are ready");
-                try {
-                    // Import Paged.js dynamically
-                    const { Previewer, Handler, registerHandlers } = window.Paged;
-
-                    class RepeatingTableHeaders extends Handler {
-                        constructor(chunker, polisher, caller) {
-                            super(chunker, polisher, caller);
-                        }
-
-                        beforePageLayout(page) {
-                            // console.log("page", page);
-                            // page.height = 200;
-                        }
-
-                        afterPageLayout(pageElement, page, breakToken, chunker) {
-                            // Find all split table elements
-                            let tables = pageElement.querySelectorAll("table[data-split-from]");
-
-                            tables.forEach((table) => {
-                                // There is an edge case where the previous page table
-                                // has zero height (isn't visible).
-                                // To avoid double header we will only add header if there is none.
-                                let tableHeader = table.querySelector("thead");
-                                if (tableHeader) {
-                                    return;
-                                }
-
-                                // Get the reference UUID of the node
-                                let ref = table.dataset.ref;
-                                // Find the node in the original source
-                                let sourceTable = chunker.source.querySelector("[data-ref='" + ref + "']");
-
-                                // Find if there is a header
-                                let sourceHeader = sourceTable.querySelector("thead");
-                                if (sourceHeader) {
-                                    console.log("Table header was cloned, because it is splitted.");
-                                    // Clone the header element
-                                    let clonedHeader = sourceHeader.cloneNode(true);
-                                    // Insert the header at the start of the split table
-                                    table.insertBefore(clonedHeader, table.firstChild);
-                                }
-                            });
-
-                            // Find all tables
-                            tables = pageElement.querySelectorAll("table");
-
-                            // special case which might not fit for everyone
-                            tables.forEach((table) => {
-                                // if the table has no rows in body, hide it.
-                                // This happens because my render engine creates empty tables.
-                                let sourceBody = table.querySelector("tbody > tr");
-                                if (!sourceBody) {
-                                    console.log("Table was hidden, because it has no rows in tbody.");
-                                    table.style.visibility = "hidden";
-                                    table.style.position = "absolute";
-
-                                    var lineSpacer = table.nextSibling;
-                                    if (lineSpacer) {
-                                        lineSpacer.style.visibility = "hidden";
-                                        lineSpacer.style.position = "absolute";
-                                    }
-                                }
-                            });
-                            try {
-                                // setting the page to show overflowing content
-                                let contents = pageElement.querySelectorAll(".pagedjs_page_content");
-                                contents.forEach((content) => {
-                                    content.style.height = 'max-content';
-                                });
-                            } catch (e) {
-                                console.warn("Failed to set page content height to max-content", e);
-                            }
-                        }
-                    }
-                    registerHandlers(RepeatingTableHeaders);
-                    
-                    console.log('Paged.js imported successfully');
-                    
-                    // Initialize pagination
-                    const previewer = new Previewer();
-                    const result = await previewer.preview();
-                    
-                    console.log('Paged.js pagination complete:', result);
-                    totalPages = result.total;
-                    
-                    // Notify parent window that rendering is complete
-                    window.parent.postMessage({
-                        type: "renderpdf", 
-                        iter: ${instanceId}
-                    }, "*");
-
-                    if (${isViewOnlySkipMakingPDF}) {
-                        window.parent.postMessage({ 
-                            type: "PREVIEW_READY",
-                            iter: ${instanceId}
-                        }, "*");
-                    } else {
-                        // PDF generation mode
-                        if (typeof generatePdfBlob === "function") { 
-                            generatePdfBlob(); 
-                        }
-                    }
-                    
-                } catch (error) {
-                    console.error('Failed to load or initialize Paged.js:', error);
-                    
-                if (${isViewOnlySkipMakingPDF}) {
-                    window.parent.postMessage({ 
-                            type: "PREVIEW_ERROR",
-                            error: "Failed to initialize Paged.js: " + error.message,
-                            iter: ${instanceId}
-                        }, "*");
-                    } else {
-                        window.parent.postMessage({
-                            type: "PDF_ERROR",
-                            error: "Failed to initialize Paged.js: " + error.message,
-                            iter: ${instanceId}
-                        }, "*");
-                    }
-                }
-            });
-        `;
-    }
-
-    /**
-     * Get PDF generation script
-     */
-    getPdfGenerationScript(instanceId, beautifyListItems = true, page_size = "a4") {
-        return `
-            function getBulletChar(listStyleType) {
-                const bulletMap = {
-                    'disc': '•',
-                    'circle': '○',
-                    'square': '▪',
-                    'none': '',
-                };
-                return bulletMap[listStyleType] || '•';
-            }
-
-            function beautifyListItemsHandler(originalBody) {
-                try {
-                    const clonedBody = originalBody?.cloneNode?.(true);
-                    if (!clonedBody) return originalBody;
-
-                    clonedBody?.querySelectorAll?.('ul, ol')?.forEach?.((list) => {
-                        list?.querySelectorAll?.('li')?.forEach?.((li) => {
-                            const originalLi = originalBody?.querySelector?.(\`[data-ref="\${li?.getAttribute?.('data-ref')}"]\`) || li;
-                            const computedStyle = window?.getComputedStyle?.(originalLi);
-                            
-                            if (computedStyle?.listStyleType !== 'none') {
-                                li.style.listStyleType = 'none';
-                                li.style.position = 'relative';
-                                li.style.paddingLeft = '-1.2em';
-                                li.style.paddingTop = '-0.3em';
-                                
-                                const bullet = document?.createElement?.('span');
-                                if (bullet) {
-                                    bullet.textContent = getBulletChar(computedStyle?.listStyleType);
-                                    bullet.style.cssText = \`
-                                        position: absolute;
-                                        left: -1.4em;
-                                        top: -0.28em;
-                                        line-height: 1.25rem;
-                                        font-size: 1.2em;
-                                        font-weight: bold;
-                                        color: currentColor;
-                                    \`;
-                                    
-                                    li?.insertBefore?.(bullet, li?.firstChild);
-                                }
-                            }
-                        });
-                    });
-
-                    return clonedBody;
-                } catch (error) {
-                    console.error('beautifyListItemsHandler failed:', error);
-                    return originalBody;
-                }
-            }
-
-            // Generate PDF blob function
-            async function generatePdfBlob() {
-                try {
-                    console.log('Starting PDF generation...');
-                    
-                    let html2pdfLib;
-                    await new Promise((resolve, reject) => {
-                        if (typeof window.html2pdf === 'function') {
-                            resolve();
-                            return;
-                        }
-                        
-                        const script = document.createElement('script');
-                        script.src = 'https://unpkg.com/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js';
-                        script.onload = () => {
-                            if (typeof window.html2pdf === 'function') {
-                                resolve();
-                            } else {
-                                reject(new Error('html2pdf not available after loading script'));
-                            }
-                        };
-                        script.onerror = () => reject(new Error('Failed to load html2pdf script'));
-                        document.head.appendChild(script);
-                    });
-                    
-                    html2pdfLib = window.html2pdf;
-                    console.log('html2pdf loaded successfully');
-                    await startPdfGeneration();
-        
-                } catch (error) {
-                    console.error("PDF generation error:", error);
-                    window.parent.postMessage({ 
-                        type: "PDF_ERROR", 
-                        error: error.message,
-                        iter: ${instanceId}
-                    }, "*");
-                }
-            }
-
-            async function startPdfGeneration() {
-                try {
-                    const originalBody = document.body;
-                    let targetElement = originalBody;
-
-                    if (${beautifyListItems}) {
-                        targetElement = beautifyListItemsHandler(originalBody);
-                    }
-
-                    console.log('Using body element for PDF generation');
-                    console.log('Element innerHTML length:', targetElement?.innerHTML?.length);
-                    
-                    if (!targetElement || targetElement?.innerHTML?.trim()?.length === 0) {
-                        throw new Error('No content found in body element');
-                    }
-                    
-                    console.log('Estimated pages:', totalPages);
-                    
-                    const opt = {
-                        margin: [0,0,0,0],
-                        filename: "document.pdf",
-                        image: { 
-                            type: "jpeg", 
-                            quality: 0.98 
-                        },
-                        html2canvas: { 
-                            scale: 2,
-                            useCORS: true,
-                            allowTaint: false,
-                            backgroundColor: '#ffffff'
-                        },
-                        jsPDF: { 
-                            unit: "mm", 
-                            format: ${JSON.stringify(page_size.toLowerCase())},
-                            orientation: "portrait",
-                            compress: true
-                        }
-                    };
-                    
-                    console.log('Starting html2pdf conversion with body element');
-                    
-                    window.html2pdf().set(opt).from(targetElement)
-                        .toPdf()
-                        .get("pdf").then(pdf => {
-                            const pageCount = pdf.internal.getNumberOfPages();
-                            console.log('Generated PDF with', pageCount, 'pages');
-                            
-                            // Remove extra pages if necessary
-                            if (pageCount > totalPages && totalPages > 0) {
-                                for (let i = pageCount; i > totalPages; i--) {
-                                    pdf.deletePage(i);
-                                }
-                            }
-                        })
-                        .outputPdf("blob").then(function (blob) {
-                            console.log('PDF blob generated:', blob);
-                            const blobUrl = URL.createObjectURL(blob);
-                            console.log("Blob URL:", blobUrl);
-                            window.parent.postMessage({ 
-                                type: "PDF_READY", 
-                                blobUrl: blobUrl,
-                                iter: ${instanceId}
-                            }, "*");
-                        })
-                        .catch(error => {
-                            console.error("PDF generation failed:", error);
-                            window.parent.postMessage({ 
-                                type: "PDF_ERROR", 
-                                error: error.message,
-                                iter: ${instanceId}
-                            }, "*");
-                        });
-                        
-                } catch (error) {
-                    console.error("PDF generation error:", error);
-                    window.parent.postMessage({ 
-                        type: "PDF_ERROR", 
-                        error: error.message,
-                        iter: ${instanceId}
-                    }, "*");
-                }
-            }
-        `;
-    }
-
-    /**
      * Create and configure iframe
      */
     createIframe(containerSelector) {
@@ -799,12 +456,10 @@ class PagifySDK {
             try {
                 const modifiedOptions = {
                     ...options,
-                    onPdfReady: (blobUrl) => {
-                        // Convert blob URL back to blob
-                        fetch(blobUrl)
-                            .then(response => response.blob())
-                            .then(blob => resolve(blob))
-                            .catch(error => reject(error));
+                    onPdfReady: (blobUrl, blob) => {
+                        // Use the Blob directly: fetching a blob: URL needs `connect-src blob:`
+                        URL.revokeObjectURL(blobUrl);
+                        resolve(blob);
                     },
                     onPdfError: (error) => {
                         reject(new Error(error));

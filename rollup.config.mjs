@@ -3,8 +3,23 @@ import commonjs from '@rollup/plugin-commonjs';
 import babel from '@rollup/plugin-babel';
 import terser from '@rollup/plugin-terser';
 import json from '@rollup/plugin-json';
+import { readFileSync } from 'fs';
 
 const isProduction = process.env.NODE_ENV === 'production';
+
+// Copies static files (frame page, type definitions) into dist/
+const emitStaticFiles = (fileNames) => ({
+    name: 'emit-static-files',
+    generateBundle() {
+        fileNames.forEach((fileName) => {
+            this.emitFile({
+                type: 'asset',
+                fileName,
+                source: readFileSync(fileName, 'utf8')
+            });
+        });
+    }
+});
 
 export default [
     // ES Module build
@@ -106,6 +121,39 @@ export default [
                 ]
             }),
             isProduction && terser()
+        ].filter(Boolean)
+    },
+
+    // Iframe runtime: Paged.js + html2pdf.js bundled, loaded by pagify-frame.html
+    {
+        input: 'pagify-frame.js',
+        output: {
+            file: 'dist/pagify-frame.js',
+            format: 'iife',
+            sourcemap: true,
+            inlineDynamicImports: true
+        },
+        plugins: [
+            nodeResolve({
+                browser: true,
+                preferBuiltins: false
+            }),
+            commonjs(),
+            json(),
+            babel({
+                babelHelpers: 'bundled',
+                exclude: 'node_modules/**',
+                presets: [
+                    ['@babel/preset-env', {
+                        targets: {
+                            browsers: ['> 1%', 'last 2 versions', 'not dead']
+                        },
+                        modules: false
+                    }]
+                ]
+            }),
+            isProduction && terser(),
+            emitStaticFiles(['pagify-frame.html', 'pagify.d.ts'])
         ].filter(Boolean)
     }
 ];
