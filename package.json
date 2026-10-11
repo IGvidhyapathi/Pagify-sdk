@@ -54,10 +54,6 @@
     "url": "https://github.com/IGvidhyapathi/Pagify-sdk/issues"
   },
   "homepage": "https://github.com/IGvidhyapathi/Pagify-sdk#readme",
-  "dependencies": {
-    "html2pdf.js": "^0.10.1",
-    "pagedjs": "^0.4.3"
-  },
   "devDependencies": {
     "@babel/core": "^7.22.0",
     "@babel/preset-env": "^7.22.0",
@@ -68,8 +64,10 @@
     "@rollup/plugin-replace": "^6.0.3",
     "@rollup/plugin-terser": "^0.4.4",
     "eslint": "^8.42.0",
+    "html2pdf.js": "^0.10.1",
     "jest": "^29.5.0",
     "jest-environment-jsdom": "^29.7.0",
+    "pagedjs": "^0.4.3",
     "rollup": "^3.25.0",
     "typescript": "^5.1.0"
   },
