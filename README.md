@@ -193,6 +193,16 @@ Build outputs:
 - `dist/pagify.standalone.js` — UMD (**this is the published main**)
 - `dist/pagify-frame.html` + `dist/pagify-frame.js` — iframe page and its runtime (Paged.js + html2pdf.js bundled); host these on your origin
 
+## Demo
+
+`index.html` is an interactive demo that uses the local build and runs under `script-src 'self'` (its script lives in `demo.js`). It must be served over HTTP, not opened as a file:
+
+```bash
+npm run build
+python3 -m http.server 8080    # or any static server, from the repo root
+# open http://localhost:8080/
+```
+
 ## Credits
 
 This package is a fork of [@eka-care/pagify-sdk](https://github.com/eka-care/Pagify-sdk), originally created and maintained by [EKA Care](https://eka.care) (`dev@eka.care`). Licensed under MIT.

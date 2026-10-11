@@ -3,6 +3,8 @@
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <!-- Safe by default even if the server sends no CSP: content HTML can never run script here -->
+        <meta http-equiv="Content-Security-Policy" content="script-src 'self'; object-src 'none'">
         <title>Pagify</title>
         <!-- All iframe code comes from this same-origin file: no inline scripts, no CDN. -->
         <script src="pagify-frame.js"></script>
